@@ -70,12 +70,23 @@ type Ready struct {
 type RawNode struct {
 	Raft *Raft
 	// Your Data Here (2A).
+	Pre_HardState pb.HardState
+	Pre_SoftState *SoftState
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
 func NewRawNode(config *Config) (*RawNode, error) {
 	// Your Code Here (2A).
-	return nil, nil
+	hardstate, _, _ := config.Storage.InitialState()
+
+	return &RawNode{
+		Raft: newRaft(config),
+		Pre_HardState: hardstate,
+		Pre_SoftState: &SoftState{
+			Lead: None,
+			RaftState: StateFollower,
+		},
+	}, nil
 }
 
 // Tick advances the internal logical clock by a single tick.
@@ -143,12 +154,35 @@ func (rn *RawNode) Step(m pb.Message) error {
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
-	return Ready{}
+	hardstate, _, _ := rn.Raft.RaftLog.storage.InitialState()
+	if hardstate.Commit == rn.Pre_HardState.Commit && hardstate.Term == rn.Pre_HardState.Term && hardstate.Vote == rn.Pre_HardState.Vote {
+		hardstate.Commit = 0
+		hardstate.Term = 0
+		hardstate.Vote = 0
+	}
+	softstate := new(SoftState)
+	if rn.Raft.Lead == rn.Pre_SoftState.Lead && rn.Raft.State == rn.Pre_SoftState.RaftState {
+		softstate = nil
+	} else {
+		softstate.Lead = rn.Raft.Lead
+		softstate.RaftState = rn.Raft.State
+	}
+
+	return Ready{
+		HardState: hardstate,
+		SoftState: softstate,
+		Entries: rn.Raft.RaftLog.unstableEntries(),
+		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
+		//Messages: ,
+	}
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
+	if len(rn.Raft.RaftLog.nextEnts()) == 0 && len(rn.Raft.RaftLog.unstableEntries()) != 0 && len(rn.Raft.msgs) != 0 {
+		return true
+	}
 	return false
 }
 
@@ -156,6 +190,15 @@ func (rn *RawNode) HasReady() bool {
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
+	if len(rd.Entries) > 0 {
+		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
+	}
+	if len(rd.CommittedEntries) > 0 {
+		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
+	}
+
+	rd.Entries = make([]pb.Entry, 0)
+	rd.CommittedEntries = make([]pb.Entry, 0)
 }
 
 // GetProgress return the Progress of this node and its peers, if this
